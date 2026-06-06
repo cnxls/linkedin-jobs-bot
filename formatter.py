@@ -1,0 +1,27 @@
+from datetime import date
+
+
+def format_single_job(job: dict, index: int) -> str:
+    lines = [f"{index}. {job['title']} — {job['company']} — {job['location']}"]
+
+    details = []
+    if job.get("salary"):
+        details.append(job["salary"])
+    if job.get("posted_at"):
+        details.append(f"Posted {job['posted_at']}")
+    if details:
+        lines.append(f"   {' | '.join(details)}")
+
+    lines.append(f"   {job['url']}")
+    return "\n".join(lines)
+
+
+def format_digest(jobs: list[dict]) -> str:
+    if not jobs:
+        return "No new jobs found today."
+
+    header = f"Daily Jobs — {date.today().strftime('%B %d')}\n"
+    body = "\n\n".join(
+        format_single_job(job, i + 1) for i, job in enumerate(jobs)
+    )
+    return f"{header}\n{body}"
