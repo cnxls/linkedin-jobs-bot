@@ -4,39 +4,84 @@ import sqlite3
 class JobsDB:
     def __init__(self, path: str):
         self.path = path
-        self._conn = sqlite3.connect(path)
-        self._create_tables()
+        self._conn = sqlite3.connect(path, check_same_thread=False)
+        self._migrate()
 
-    def _create_tables(self):
+    def _migrate(self):
         self._conn.execute(
-            "CREATE TABLE IF NOT EXISTS seen_jobs (job_id TEXT PRIMARY KEY)"
+            "CREATE TABLE IF NOT EXISTS seen_jobs ("
+            "  chat_id TEXT NOT NULL,"
+            "  job_id TEXT NOT NULL,"
+            "  PRIMARY KEY (chat_id, job_id)"
+            ")"
         )
         self._conn.execute(
-            "CREATE TABLE IF NOT EXISTS keywords (keyword TEXT NOT NULL)"
+            "CREATE TABLE IF NOT EXISTS keywords ("
+            "  chat_id TEXT NOT NULL,"
+            "  keyword TEXT NOT NULL"
+            ")"
+        )
+        self._conn.execute(
+            "CREATE TABLE IF NOT EXISTS subscribers ("
+            "  chat_id TEXT PRIMARY KEY,"
+            "  interval_hours INTEGER NOT NULL DEFAULT 24"
+            ")"
         )
         self._conn.commit()
 
-    def is_seen(self, job_id: str) -> bool:
+    def is_seen(self, chat_id: str, job_id: str) -> bool:
         row = self._conn.execute(
-            "SELECT 1 FROM seen_jobs WHERE job_id = ?", (job_id,)
+            "SELECT 1 FROM seen_jobs WHERE chat_id = ? AND job_id = ?",
+            (chat_id, job_id),
         ).fetchone()
         return row is not None
 
-    def mark_seen(self, job_id: str):
+    def mark_seen(self, chat_id: str, job_id: str):
         self._conn.execute(
-            "INSERT OR IGNORE INTO seen_jobs (job_id) VALUES (?)", (job_id,)
+            "INSERT OR IGNORE INTO seen_jobs (chat_id, job_id) VALUES (?, ?)",
+            (chat_id, job_id),
         )
         self._conn.commit()
 
-    def get_keywords(self) -> list[str]:
-        rows = self._conn.execute("SELECT keyword FROM keywords").fetchall()
+    def get_keywords(self, chat_id: str) -> list[str]:
+        rows = self._conn.execute(
+            "SELECT keyword FROM keywords WHERE chat_id = ?", (chat_id,)
+        ).fetchall()
         return [r[0] for r in rows]
 
-    def set_keywords(self, keywords: list[str]):
-        self._conn.execute("DELETE FROM keywords")
+    def set_keywords(self, chat_id: str, keywords: list[str]):
+        self._conn.execute("DELETE FROM keywords WHERE chat_id = ?", (chat_id,))
         for kw in keywords:
-            self._conn.execute("INSERT INTO keywords (keyword) VALUES (?)", (kw,))
+            self._conn.execute(
+                "INSERT INTO keywords (chat_id, keyword) VALUES (?, ?)",
+                (chat_id, kw),
+            )
         self._conn.commit()
+
+    def subscribe(self, chat_id: str, interval_hours: int = 24):
+        self._conn.execute(
+            "INSERT OR REPLACE INTO subscribers (chat_id, interval_hours) VALUES (?, ?)",
+            (chat_id, interval_hours),
+        )
+        self._conn.commit()
+
+    def unsubscribe(self, chat_id: str):
+        self._conn.execute(
+            "DELETE FROM subscribers WHERE chat_id = ?", (chat_id,)
+        )
+        self._conn.commit()
+
+    def is_subscribed(self, chat_id: str) -> bool:
+        row = self._conn.execute(
+            "SELECT 1 FROM subscribers WHERE chat_id = ?", (chat_id,)
+        ).fetchone()
+        return row is not None
+
+    def get_subscribers(self) -> list[dict]:
+        rows = self._conn.execute(
+            "SELECT chat_id, interval_hours FROM subscribers"
+        ).fetchall()
+        return [{"chat_id": r[0], "interval_hours": r[1]} for r in rows]
 
     def close(self):
         self._conn.close()
