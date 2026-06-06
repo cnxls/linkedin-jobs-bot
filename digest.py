@@ -18,14 +18,14 @@ async def run_digest(
 ):
     db = JobsDB(db_path)
 
-    keywords = db.get_keywords() or default_keywords or []
+    keywords = db.get_keywords(chat_id) or default_keywords or []
     all_jobs = search_jobs(apify_token, keywords, DEFAULT_LOCATION, DEFAULT_EXPERIENCE_LEVEL)
 
     new_jobs = []
     for job in all_jobs:
-        if not db.is_seen(job["id"]):
+        if not db.is_seen(chat_id, job["id"]):
             new_jobs.append(job)
-            db.mark_seen(job["id"])
+            db.mark_seen(chat_id, job["id"])
 
     message = format_digest(new_jobs)
 
