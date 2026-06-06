@@ -1,6 +1,9 @@
-from telegram import Update
+import json
+
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder,
+    CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
     MessageHandler,
@@ -10,7 +13,7 @@ from telegram.ext import (
 
 from db import JobsDB
 from scraper import search_jobs
-from formatter import format_digest_chunks
+from formatter import format_single_job
 
 WAITING_KEYWORDS = 1
 WAITING_INTERVAL = 2
@@ -20,19 +23,41 @@ def _get_chat_id(update: Update) -> str:
     return str(update.effective_chat.id)
 
 
+def _main_menu_keyboard(pending_count: int = 0) -> InlineKeyboardMarkup:
+    check_label = "Search for jobs"
+    if pending_count > 0:
+        check_label = f"Search for jobs ({pending_count} pending)"
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(check_label, callback_data="cmd_check")],
+        [InlineKeyboardButton("My keywords", callback_data="cmd_keywords")],
+        [
+            InlineKeyboardButton("Subscribe", callback_data="cmd_subscribe"),
+            InlineKeyboardButton("Unsubscribe", callback_data="cmd_unsubscribe"),
+        ],
+        [InlineKeyboardButton("Status", callback_data="cmd_status")],
+    ])
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = _get_chat_id(update)
+    pending = context.user_data.get("pending_jobs", [])
     await update.message.reply_text(
-        "LinkedIn Jobs Bot\n\n"
-        "/check — Search for jobs now\n"
-        "/keywords — View/update search keywords\n"
-        "/subscribe — Auto-check on a schedule\n"
-        "/unsubscribe — Stop auto-checks\n"
-        "/status — Show your current settings"
+        "LinkedIn Jobs Bot",
+        reply_markup=_main_menu_keyboard(len(pending)),
     )
 
 
 async def check(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Searching for jobs...")
+    query = update.callback_query
+    if query:
+        await query.answer()
+        await query.edit_message_text("Searching for jobs...")
+        send = lambda text, **kw: context.bot.send_message(
+            chat_id=update.effective_chat.id, text=text, **kw
+        )
+    else:
+        await update.message.reply_text("Searching for jobs...")
+        send = update.message.reply_text
 
     cfg = context.bot_data
     db: JobsDB = cfg["db"]
@@ -46,11 +71,78 @@ async def check(update: Update, context: ContextTypes.DEFAULT_TYPE):
             new_jobs.append(job)
             db.mark_seen(chat_id, job["id"])
 
-    for chunk in format_digest_chunks(new_jobs):
-        await update.message.reply_text(chunk)
+    if not new_jobs:
+        await send("No new jobs found.", reply_markup=_main_menu_keyboard())
+        return
+
+    context.user_data["pending_jobs"] = new_jobs
+    context.user_data["pending_index"] = 0
+
+    await _send_next_job(update, context)
+
+
+async def _send_next_job(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    jobs = context.user_data.get("pending_jobs", [])
+    idx = context.user_data.get("pending_index", 0)
+
+    if idx >= len(jobs):
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text="No more offers.",
+            reply_markup=_main_menu_keyboard(),
+        )
+        context.user_data["pending_jobs"] = []
+        context.user_data["pending_index"] = 0
+        return
+
+    job = jobs[idx]
+    remaining = len(jobs) - idx - 1
+    text = format_single_job(job, idx + 1)
+
+    buttons = []
+    if remaining > 0:
+        buttons.append(InlineKeyboardButton(
+            f"Next offer ({remaining} left)", callback_data="next_job"
+        ))
+    buttons.append(InlineKeyboardButton("Done", callback_data="done_jobs"))
+
+    await context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text=text,
+        reply_markup=InlineKeyboardMarkup([buttons]),
+    )
+    context.user_data["pending_index"] = idx + 1
+
+
+async def on_next_job(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    await _send_next_job(update, context)
+
+
+async def on_done_jobs(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    remaining = len(context.user_data.get("pending_jobs", [])) - context.user_data.get("pending_index", 0)
+    context.user_data["pending_jobs"] = []
+    context.user_data["pending_index"] = 0
+    if remaining > 0:
+        text = f"Stopped. {remaining} offers skipped."
+    else:
+        text = "All offers shown."
+    await query.edit_message_reply_markup(reply_markup=None)
+    await context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text=text,
+        reply_markup=_main_menu_keyboard(),
+    )
 
 
 async def keywords_show(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    if query:
+        await query.answer()
+
     cfg = context.bot_data
     db: JobsDB = cfg["db"]
     chat_id = _get_chat_id(update)
@@ -59,7 +151,13 @@ async def keywords_show(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for kw in current:
         text += f"  - {kw}\n"
     text += "\nSend new keywords (comma-separated) or /cancel:"
-    await update.message.reply_text(text)
+
+    if query:
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id, text=text
+        )
+    else:
+        await update.message.reply_text(text)
     return WAITING_KEYWORDS
 
 
@@ -74,17 +172,62 @@ async def keywords_update(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = _get_chat_id(update)
     db.set_keywords(chat_id, new_keywords)
     await update.message.reply_text(
-        "Updated keywords to:\n" + "\n".join(f"  - {kw}" for kw in new_keywords)
+        "Updated keywords to:\n" + "\n".join(f"  - {kw}" for kw in new_keywords),
+        reply_markup=_main_menu_keyboard(),
     )
     return ConversationHandler.END
 
 
 async def subscribe_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "How often should I check for new jobs?\n\n"
-        "Send a number in hours (e.g. 6, 12, 24) or /cancel:"
-    )
+    query = update.callback_query
+    if query:
+        await query.answer()
+
+    buttons = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("Every 6h", callback_data="sub_6"),
+            InlineKeyboardButton("Every 12h", callback_data="sub_12"),
+        ],
+        [
+            InlineKeyboardButton("Every 24h", callback_data="sub_24"),
+            InlineKeyboardButton("Custom", callback_data="sub_custom"),
+        ],
+    ])
+
+    text = "How often should I check for new jobs?"
+    if query:
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id, text=text, reply_markup=buttons
+        )
+    else:
+        await update.message.reply_text(text, reply_markup=buttons)
     return WAITING_INTERVAL
+
+
+async def subscribe_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    data = query.data
+    if data == "sub_custom":
+        await query.edit_message_text("Send a number of hours (1-168):")
+        return WAITING_INTERVAL
+
+    hours = int(data.split("_")[1])
+    db: JobsDB = context.bot_data["db"]
+    chat_id = _get_chat_id(update)
+    db.subscribe(chat_id, hours)
+    _schedule_user_job(context, chat_id, hours)
+
+    await query.edit_message_text(
+        f"Subscribed! I'll check every {hours}h and send you new jobs."
+    )
+    await context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text="Menu:",
+        reply_markup=_main_menu_keyboard(),
+    )
+    return ConversationHandler.END
 
 
 async def subscribe_set(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -99,56 +242,97 @@ async def subscribe_set(update: Update, context: ContextTypes.DEFAULT_TYPE):
     db: JobsDB = context.bot_data["db"]
     chat_id = _get_chat_id(update)
     db.subscribe(chat_id, hours)
-
     _schedule_user_job(context, chat_id, hours)
 
     await update.message.reply_text(
-        f"Subscribed! I'll check every {hours}h and send you new jobs."
+        f"Subscribed! I'll check every {hours}h and send you new jobs.",
+        reply_markup=_main_menu_keyboard(),
     )
     return ConversationHandler.END
 
 
 async def unsubscribe(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    if query:
+        await query.answer()
+
     db: JobsDB = context.bot_data["db"]
     chat_id = _get_chat_id(update)
 
     if not db.is_subscribed(chat_id):
-        await update.message.reply_text("You're not subscribed.")
-        return
+        text = "You're not subscribed."
+    else:
+        db.unsubscribe(chat_id)
+        _remove_user_job(context, chat_id)
+        text = "Unsubscribed. No more auto-checks."
 
-    db.unsubscribe(chat_id)
-    _remove_user_job(context, chat_id)
-    await update.message.reply_text("Unsubscribed. No more auto-checks.")
+    if query:
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id, text=text,
+            reply_markup=_main_menu_keyboard(),
+        )
+    else:
+        await update.message.reply_text(text, reply_markup=_main_menu_keyboard())
 
 
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    if query:
+        await query.answer()
+
     cfg = context.bot_data
     db: JobsDB = cfg["db"]
     chat_id = _get_chat_id(update)
 
     keywords = db.get_keywords(chat_id) or cfg["default_keywords"]
-    subscribed = db.is_subscribed(chat_id)
+    pending = context.user_data.get("pending_jobs", [])
+    pending_idx = context.user_data.get("pending_index", 0)
+    remaining = max(0, len(pending) - pending_idx)
 
     text = "Your settings:\n\n"
     text += "Keywords:\n"
     for kw in keywords:
         text += f"  - {kw}\n"
 
-    if subscribed:
-        subs = db.get_subscribers()
-        for s in subs:
+    if db.is_subscribed(chat_id):
+        for s in db.get_subscribers():
             if s["chat_id"] == chat_id:
                 text += f"\nAuto-check: every {s['interval_hours']}h"
                 break
     else:
-        text += "\nAuto-check: off (/subscribe to enable)"
+        text += "\nAuto-check: off"
 
-    await update.message.reply_text(text)
+    if remaining > 0:
+        text += f"\nPending offers: {remaining}"
+
+    if query:
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id, text=text,
+            reply_markup=_main_menu_keyboard(remaining),
+        )
+    else:
+        await update.message.reply_text(text, reply_markup=_main_menu_keyboard(remaining))
 
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Cancelled.")
+    await update.message.reply_text("Cancelled.", reply_markup=_main_menu_keyboard())
     return ConversationHandler.END
+
+
+async def on_menu_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    data = query.data
+
+    if data == "cmd_check":
+        await check(update, context)
+    elif data == "cmd_keywords":
+        await keywords_show(update, context)
+    elif data == "cmd_subscribe":
+        await subscribe_start(update, context)
+    elif data == "cmd_unsubscribe":
+        await unsubscribe(update, context)
+    elif data == "cmd_status":
+        await status(update, context)
 
 
 async def _scheduled_check(context: ContextTypes.DEFAULT_TYPE):
@@ -165,9 +349,26 @@ async def _scheduled_check(context: ContextTypes.DEFAULT_TYPE):
             new_jobs.append(job)
             db.mark_seen(chat_id, job["id"])
 
-    if new_jobs:
-        for chunk in format_digest_chunks(new_jobs):
-            await context.bot.send_message(chat_id=chat_id, text=chunk)
+    if not new_jobs:
+        return
+
+    await context.bot.send_message(
+        chat_id=chat_id,
+        text=f"Found {len(new_jobs)} new job(s)!",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("Show offers", callback_data="show_scheduled")],
+        ]),
+    )
+
+    user_data = context.application.user_data.setdefault(int(chat_id), {})
+    user_data["pending_jobs"] = new_jobs
+    user_data["pending_index"] = 0
+
+
+async def on_show_scheduled(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    await _send_next_job(update, context)
 
 
 def _schedule_user_job(context: ContextTypes.DEFAULT_TYPE, chat_id: str, interval_hours: int):
@@ -222,8 +423,15 @@ def main():
     app.add_handler(CommandHandler("unsubscribe", unsubscribe))
     app.add_handler(CommandHandler("status", status))
 
+    app.add_handler(CallbackQueryHandler(on_next_job, pattern="^next_job$"))
+    app.add_handler(CallbackQueryHandler(on_done_jobs, pattern="^done_jobs$"))
+    app.add_handler(CallbackQueryHandler(on_show_scheduled, pattern="^show_scheduled$"))
+
     keywords_handler = ConversationHandler(
-        entry_points=[CommandHandler("keywords", keywords_show)],
+        entry_points=[
+            CommandHandler("keywords", keywords_show),
+            CallbackQueryHandler(keywords_show, pattern="^cmd_keywords$"),
+        ],
         states={
             WAITING_KEYWORDS: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, keywords_update)
@@ -234,15 +442,21 @@ def main():
     app.add_handler(keywords_handler)
 
     subscribe_handler = ConversationHandler(
-        entry_points=[CommandHandler("subscribe", subscribe_start)],
+        entry_points=[
+            CommandHandler("subscribe", subscribe_start),
+            CallbackQueryHandler(subscribe_start, pattern="^cmd_subscribe$"),
+        ],
         states={
             WAITING_INTERVAL: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, subscribe_set)
+                CallbackQueryHandler(subscribe_button, pattern="^sub_"),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, subscribe_set),
             ]
         },
         fallbacks=[CommandHandler("cancel", cancel)],
     )
     app.add_handler(subscribe_handler)
+
+    app.add_handler(CallbackQueryHandler(on_menu_button, pattern="^cmd_"))
 
     app.post_init = _restore_subscriptions
 
