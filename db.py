@@ -27,7 +27,35 @@ class JobsDB:
             "  interval_hours INTEGER NOT NULL DEFAULT 24"
             ")"
         )
+        self._conn.execute(
+            "CREATE TABLE IF NOT EXISTS preferences ("
+            "  chat_id TEXT NOT NULL,"
+            "  key TEXT NOT NULL,"
+            "  value TEXT NOT NULL,"
+            "  PRIMARY KEY (chat_id, key)"
+            ")"
+        )
         self._conn.commit()
+
+    def get_preference(self, chat_id: str, key: str) -> str | None:
+        row = self._conn.execute(
+            "SELECT value FROM preferences WHERE chat_id = ? AND key = ?",
+            (chat_id, key),
+        ).fetchone()
+        return row[0] if row else None
+
+    def set_preference(self, chat_id: str, key: str, value: str):
+        self._conn.execute(
+            "INSERT OR REPLACE INTO preferences (chat_id, key, value) VALUES (?, ?, ?)",
+            (chat_id, key, value),
+        )
+        self._conn.commit()
+
+    def get_all_preferences(self, chat_id: str) -> dict:
+        rows = self._conn.execute(
+            "SELECT key, value FROM preferences WHERE chat_id = ?", (chat_id,)
+        ).fetchall()
+        return {r[0]: r[1] for r in rows}
 
     def is_seen(self, chat_id: str, job_id: str) -> bool:
         row = self._conn.execute(

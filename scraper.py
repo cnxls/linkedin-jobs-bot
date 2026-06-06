@@ -6,15 +6,22 @@ from apify_client import ApifyClient
 ACTOR_ID = "curious_coder/linkedin-jobs-scraper"
 
 
-def build_linkedin_search_url(keyword: str, location: str, experience_level: str) -> str:
-    # f_E=1 is Internship, f_TPR=r86400 is past 24 hours
-    return (
+def build_linkedin_search_url(
+    keyword: str,
+    location: str,
+    experience_level: str,
+    job_type: str = "",
+) -> str:
+    url = (
         f"https://www.linkedin.com/jobs/search/?"
         f"keywords={quote_plus(keyword)}"
         f"&location={quote_plus(location)}"
         f"&f_E={experience_level}"
         f"&f_TPR=r86400"
     )
+    if job_type:
+        url += f"&f_WT={job_type}"
+    return url
 
 
 def parse_job_item(raw: dict) -> dict:
@@ -40,11 +47,12 @@ def search_jobs(
     keywords: list[str],
     location: str,
     experience_level: str,
+    job_type: str = "",
 ) -> list[dict]:
     client = ApifyClient(apify_token)
 
     urls = [
-        build_linkedin_search_url(kw, location, experience_level)
+        build_linkedin_search_url(kw, location, experience_level, job_type)
         for kw in keywords
     ]
 

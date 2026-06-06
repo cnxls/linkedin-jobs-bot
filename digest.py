@@ -19,7 +19,11 @@ async def run_digest(
     db = JobsDB(db_path)
 
     keywords = db.get_keywords(chat_id) or default_keywords or []
-    all_jobs = search_jobs(apify_token, keywords, DEFAULT_LOCATION, DEFAULT_EXPERIENCE_LEVEL)
+    prefs = db.get_all_preferences(chat_id)
+    location = prefs.get("location", DEFAULT_LOCATION)
+    experience_level = prefs.get("experience_level", DEFAULT_EXPERIENCE_LEVEL)
+    job_type = prefs.get("job_type", "")
+    all_jobs = search_jobs(apify_token, keywords, location, experience_level, job_type)
 
     new_jobs = []
     for job in all_jobs:
