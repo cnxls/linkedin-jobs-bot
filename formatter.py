@@ -1,21 +1,35 @@
 from datetime import date
+from html import escape
 
 MAX_MESSAGE_LENGTH = 4000
 
 
 def format_single_job(job: dict, index: int) -> str:
-    lines = [f"{index}. {job['title']} — {job['company']} — {job['location']}"]
+    title = escape(job.get("title", "Unknown"))
+    company = escape(job.get("company", "Unknown"))
+    location = escape(job.get("location", "Unknown"))
+    url = job.get("url", "")
+
+    lines = [f"<b>{title}</b>"]
+    lines.append(f"{company}  ·  {location}")
 
     details = []
     if job.get("salary"):
-        details.append(job["salary"])
+        details.append(f"<b>{escape(job['salary'])}</b>")
     if job.get("posted_at"):
-        details.append(f"Posted {job['posted_at']}")
+        details.append(escape(job["posted_at"]))
     if details:
-        lines.append(f"   {' | '.join(details)}")
+        lines.append(" | ".join(details))
 
-    lines.append(f"   {job['url']}")
+    if url:
+        lines.append(f'<a href="{url}">View on LinkedIn</a>')
+
     return "\n".join(lines)
+
+
+def format_job_card(job: dict, index: int, total: int) -> str:
+    header = f"Offer {index}/{total}\n\n"
+    return header + format_single_job(job, index)
 
 
 def format_digest(jobs: list[dict]) -> str:
