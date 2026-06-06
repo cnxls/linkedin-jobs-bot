@@ -15,12 +15,12 @@ def test_run_digest_sends_new_jobs():
 
         mock_search.return_value = [
             {
-                "id": "123",
+                "id": "job456",
                 "title": "ML Intern",
                 "company": "Google",
                 "location": "Kraków",
                 "salary": None,
-                "url": "https://linkedin.com/jobs/view/123",
+                "url": "https://linkedin.com/jobs/view/456",
                 "posted_at": "2026-06-05",
             }
         ]
@@ -36,7 +36,7 @@ def test_run_digest_sends_new_jobs():
         ))
 
         mock_bot.send_message.assert_called_once()
-        mock_db.mark_seen.assert_called_with("123")
+        mock_db.mark_seen.assert_called_with("123", "job456")
 
 
 def test_run_digest_skips_seen_jobs():
@@ -51,12 +51,12 @@ def test_run_digest_skips_seen_jobs():
 
         mock_search.return_value = [
             {
-                "id": "123",
+                "id": "job456",
                 "title": "ML Intern",
                 "company": "Google",
                 "location": "Kraków",
                 "salary": None,
-                "url": "https://linkedin.com/jobs/view/123",
+                "url": "https://linkedin.com/jobs/view/456",
                 "posted_at": "2026-06-05",
             }
         ]
