@@ -1,0 +1,19 @@
+import os
+
+APIFY_TOKEN = os.environ["APIFY_TOKEN"]
+TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
+TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
+
+DB_PATH = os.path.join(os.path.dirname(__file__), "jobs.db")
+
+APIFY_ACTOR_ID = "bebity/linkedin-jobs-scraper"
+
+DEFAULT_KEYWORDS = [
+    "Machine Learning Intern",
+    "AI Developer Intern",
+    "Python Developer Intern",
+    "Data Scientist Intern",
+]
+
+DEFAULT_LOCATION = "Poland"
+DEFAULT_EXPERIENCE_LEVEL = "1"  # 1 = Internship
