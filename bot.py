@@ -15,7 +15,7 @@ from telegram.ext import (
 
 from db import JobsDB
 from scraper import search_jobs
-from formatter import format_job_card
+from formatter import format_job_card, format_single_job
 
 WAITING_KEYWORDS = 1
 WAITING_INTERVAL = 2
@@ -70,6 +70,7 @@ def _main_menu_keyboard(pending_count: int = 0) -> InlineKeyboardMarkup:
         [
             InlineKeyboardButton("Subscribe", callback_data="cmd_subscribe"),
             InlineKeyboardButton("Status", callback_data="cmd_status"),
+            InlineKeyboardButton("Saved", callback_data="cmd_saved"),
         ],
         [
             InlineKeyboardButton("Unsubscribe", callback_data="cmd_unsubscribe"),
@@ -128,7 +129,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def check(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     if query:
-        await query.answer()
+        try:
+            await query.answer()
+        except Exception:
+            pass
         try:
             await query.edit_message_text("Scanning LinkedIn for new offers...")
         except Exception:
@@ -163,6 +167,8 @@ async def check(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     context.user_data["pending_jobs"] = new_jobs
     context.user_data["pending_index"] = 0
+    context.user_data["saved_count"] = 0
+    context.user_data["browse_message_id"] = None
 
     await _send(
         update, context,
@@ -171,41 +177,87 @@ async def check(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await _send_next_job(update, context)
 
 
+def _browse_summary(context: ContextTypes.DEFAULT_TYPE) -> tuple[str, InlineKeyboardMarkup]:
+    jobs = context.user_data.get("pending_jobs", [])
+    total = len(jobs)
+    idx = context.user_data.get("pending_index", 0)
+    saved = context.user_data.get("saved_count", 0)
+    remaining = max(0, total - idx)
+
+    text = f"You browsed <b>{total}</b> offers, saved <b>{saved}</b>."
+    if remaining > 0:
+        text += f"\n<b>{remaining}</b> offers skipped."
+
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("Search for jobs", callback_data="cmd_check")],
+    ])
+
+    context.user_data["pending_jobs"] = []
+    context.user_data["pending_index"] = 0
+    context.user_data["saved_count"] = 0
+    context.user_data["browse_message_id"] = None
+
+    return text, keyboard
+
+
 async def _send_next_job(update: Update, context: ContextTypes.DEFAULT_TYPE):
     jobs = context.user_data.get("pending_jobs", [])
     idx = context.user_data.get("pending_index", 0)
     total = len(jobs)
+    chat_id = update.effective_chat.id
+    browse_msg_id = context.user_data.get("browse_message_id")
 
     if idx >= total:
-        await context.bot.send_message(
-            chat_id=update.effective_chat.id,
-            text="That's all the offers!",
-            parse_mode=ParseMode.HTML,
-            reply_markup=_main_menu_keyboard(),
-        )
-        context.user_data["pending_jobs"] = []
-        context.user_data["pending_index"] = 0
+        text, keyboard = _browse_summary(context)
+        if browse_msg_id:
+            await context.bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=browse_msg_id,
+                text=text,
+                parse_mode=ParseMode.HTML,
+                reply_markup=keyboard,
+            )
+        else:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=text,
+                parse_mode=ParseMode.HTML,
+                reply_markup=keyboard,
+            )
         return
 
     job = jobs[idx]
     remaining = total - idx - 1
     text = format_job_card(job, idx + 1, total)
 
-    buttons = []
+    buttons = [InlineKeyboardButton("Save", callback_data="save_job")]
     if remaining > 0:
         buttons.append(InlineKeyboardButton(
             f"Next  ({remaining} left)", callback_data="next_job"
         ))
     buttons.append(InlineKeyboardButton("Done", callback_data="done_jobs"))
 
-    await context.bot.send_message(
-        chat_id=update.effective_chat.id,
-        text=text,
-        parse_mode=ParseMode.HTML,
-        reply_markup=InlineKeyboardMarkup([buttons]),
-        disable_web_page_preview=True,
-    )
+    keyboard = InlineKeyboardMarkup([buttons])
     context.user_data["pending_index"] = idx + 1
+
+    if browse_msg_id:
+        await context.bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=browse_msg_id,
+            text=text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=keyboard,
+            disable_web_page_preview=True,
+        )
+    else:
+        msg = await context.bot.send_message(
+            chat_id=chat_id,
+            text=text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=keyboard,
+            disable_web_page_preview=True,
+        )
+        context.user_data["browse_message_id"] = msg.message_id
 
 
 async def on_next_job(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -217,22 +269,64 @@ async def on_next_job(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def on_done_jobs(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    remaining = len(context.user_data.get("pending_jobs", [])) - context.user_data.get("pending_index", 0)
-    context.user_data["pending_jobs"] = []
-    context.user_data["pending_index"] = 0
 
-    if remaining > 0:
-        text = f"Stopped. <b>{remaining}</b> offers skipped."
+    browse_msg_id = context.user_data.get("browse_message_id")
+    text, keyboard = _browse_summary(context)
+
+    if browse_msg_id:
+        await context.bot.edit_message_text(
+            chat_id=update.effective_chat.id,
+            message_id=browse_msg_id,
+            text=text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=keyboard,
+        )
     else:
-        text = "All offers shown!"
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=keyboard,
+        )
 
-    await query.edit_message_reply_markup(reply_markup=None)
+
+async def on_save_job(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    cfg = context.bot_data
+    db: JobsDB = cfg["db"]
+    chat_id = _get_chat_id(update)
+
+    jobs = context.user_data.get("pending_jobs", [])
+    idx = context.user_data.get("pending_index", 0)
+
+    # pending_index was already incremented after displaying, so current job is idx - 1
+    current_idx = idx - 1
+    if current_idx < 0 or current_idx >= len(jobs):
+        await query.answer("No job to save.")
+        return
+
+    job = jobs[current_idx]
+    db.save_job(chat_id, job)
+
+    # Send a standalone saved-job message with LinkedIn URL button
+    total = len(jobs)
+    text = format_job_card(job, current_idx + 1, total)
     await context.bot.send_message(
         chat_id=update.effective_chat.id,
         text=text,
         parse_mode=ParseMode.HTML,
-        reply_markup=_main_menu_keyboard(),
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("Open on LinkedIn", url=job["url"])],
+        ]),
+        disable_web_page_preview=True,
     )
+
+    context.user_data["saved_count"] = context.user_data.get("saved_count", 0) + 1
+
+    # Auto-advance to next job (or summary if last)
+    await _send_next_job(update, context)
 
 
 async def keywords_show(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -621,6 +715,71 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 
+async def saved_jobs_show(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    if query:
+        await query.answer()
+
+    cfg = context.bot_data
+    db: JobsDB = cfg["db"]
+    chat_id = _get_chat_id(update)
+    jobs = db.get_saved_jobs(chat_id)
+
+    if not jobs:
+        await _send(
+            update, context,
+            "No saved jobs yet.",
+            reply_markup=_main_menu_keyboard(),
+        )
+        return
+
+    MAX_LEN = 4000
+    header = f"<b>Saved Jobs ({len(jobs)})</b>\n\n"
+    parts = []
+    total_len = len(header)
+    truncated = 0
+
+    for i, job in enumerate(jobs):
+        card = format_single_job(job, i + 1)
+        entry = card + "\n\n"
+        if total_len + len(entry) > MAX_LEN:
+            truncated = len(jobs) - i
+            break
+        parts.append(entry)
+        total_len += len(entry)
+
+    body = header + "".join(parts)
+    if truncated:
+        body = body.rstrip() + f"\n\n<i>…and {truncated} more. Clear and re-save to refresh.</i>"
+
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("Clear saved", callback_data="clear_saved")],
+    ])
+
+    await _send(
+        update, context,
+        body,
+        reply_markup=keyboard,
+        disable_web_page_preview=True,
+    )
+
+
+async def on_clear_saved(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    cfg = context.bot_data
+    db: JobsDB = cfg["db"]
+    chat_id = _get_chat_id(update)
+    db.clear_saved_jobs(chat_id)
+
+    await query.edit_message_text(
+        "Saved jobs cleared.",
+        parse_mode=ParseMode.HTML,
+        reply_markup=_main_menu_keyboard(),
+    )
+
+
 async def on_menu_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     data = query.data
@@ -637,6 +796,8 @@ async def on_menu_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await status(update, context)
     elif data == "cmd_settings":
         await settings_show(update, context)
+    elif data == "cmd_saved":
+        await saved_jobs_show(update, context)
 
 
 async def _scheduled_check(context: ContextTypes.DEFAULT_TYPE):
@@ -676,7 +837,12 @@ async def _scheduled_check(context: ContextTypes.DEFAULT_TYPE):
 
 async def on_show_scheduled(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer()
+    try:
+        await query.answer()
+    except Exception:
+        pass
+    context.user_data["saved_count"] = 0
+    context.user_data["browse_message_id"] = None
     await _send_next_job(update, context)
 
 
@@ -732,9 +898,13 @@ def main():
     app.add_handler(CommandHandler("unsubscribe", unsubscribe))
     app.add_handler(CommandHandler("status", status))
 
+    app.add_handler(CommandHandler("saved", saved_jobs_show))
+
     app.add_handler(CallbackQueryHandler(on_next_job, pattern="^next_job$"))
     app.add_handler(CallbackQueryHandler(on_done_jobs, pattern="^done_jobs$"))
+    app.add_handler(CallbackQueryHandler(on_save_job, pattern="^save_job$"))
     app.add_handler(CallbackQueryHandler(on_show_scheduled, pattern="^show_scheduled$"))
+    app.add_handler(CallbackQueryHandler(on_clear_saved, pattern="^clear_saved$"))
 
     keywords_handler = ConversationHandler(
         entry_points=[

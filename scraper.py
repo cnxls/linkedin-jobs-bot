@@ -35,10 +35,10 @@ def parse_job_item(raw: dict) -> dict:
         "title": raw.get("title", "Unknown"),
         "company": raw.get("companyName") or raw.get("company", "Unknown"),
         "location": raw.get("location", "Unknown"),
-        "salary": raw.get("salary") or None,
+        "salary": raw.get("salary") or (", ".join(raw["salaryInfo"]) if raw.get("salaryInfo") else None),
         "url": url,
         "posted_at": raw.get("postedAt") or raw.get("publishedAt"),
-        "description": raw.get("description", ""),
+        "description": raw.get("descriptionText") or raw.get("description") or "",
     }
 
 

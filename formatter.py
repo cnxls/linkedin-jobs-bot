@@ -1,7 +1,48 @@
+import re
 from datetime import date
 from html import escape
 
 MAX_MESSAGE_LENGTH = 4000
+
+_REQ_HEADING = re.compile(
+    r"(?:^|\n)\s*(?:requirements?|qualifications?|what (?:we|you).*?(?:need|look|expect|bring)"
+    r"|must[- ]haves?|who you are|skills?\s*(?:&|and)\s*(?:experience|qualifications?)"
+    r"|what you.ll need|desired skills|key skills|about you|minimum qualifications"
+    r"|basic qualifications|preferred qualifications)\s*:?\s*\n",
+    re.IGNORECASE,
+)
+_BULLET = re.compile(r"^\s*[-•●◦▪*·]\s*", re.MULTILINE)
+_NEXT_SECTION = re.compile(
+    r"\n\s*(?:responsibilities|benefits|about (?:us|the)|what we offer|perks"
+    r"|how to apply|nice[- ]to[- ]have|preferred|bonus|additional|what you.ll (?:do|get)"
+    r"|why (?:join|work)|our (?:offer|benefits)|compensation)\s*:?\s*\n",
+    re.IGNORECASE,
+)
+
+
+def _extract_requirements(description: str, max_items: int = 6) -> list[str]:
+    if not description:
+        return []
+    m = _REQ_HEADING.search(description)
+    if not m:
+        return []
+    section = description[m.end():]
+    next_heading = _NEXT_SECTION.search(section)
+    if next_heading:
+        section = section[:next_heading.start()]
+    lines = _BULLET.split(section)
+    if len(lines) <= 1:
+        lines = section.strip().split("\n")
+    items = []
+    for line in lines:
+        line = line.strip().split("\n")[0].strip()
+        if len(line) > 15:
+            if line.endswith("."):
+                line = line[:-1]
+            items.append(line)
+        if len(items) >= max_items:
+            break
+    return items
 
 
 def format_single_job(job: dict, index: int) -> str:
@@ -20,6 +61,11 @@ def format_single_job(job: dict, index: int) -> str:
         details.append(escape(job["posted_at"]))
     if details:
         lines.append(" | ".join(details))
+
+    reqs = _extract_requirements(job.get("description", ""))
+    if reqs:
+        req_text = "\n".join(f"· {escape(r)}" for r in reqs)
+        lines.append(f"\n<blockquote>{req_text}</blockquote>")
 
     if url:
         lines.append(f'<a href="{url}">View on LinkedIn</a>')

@@ -35,7 +35,27 @@ class JobsDB:
             "  PRIMARY KEY (chat_id, key)"
             ")"
         )
+        self._conn.execute(
+            "CREATE TABLE IF NOT EXISTS saved_jobs ("
+            "  chat_id TEXT NOT NULL,"
+            "  job_id TEXT NOT NULL,"
+            "  title TEXT,"
+            "  company TEXT,"
+            "  location TEXT,"
+            "  salary TEXT,"
+            "  posted_at TEXT,"
+            "  url TEXT,"
+            "  description TEXT,"
+            "  saved_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,"
+            "  PRIMARY KEY (chat_id, job_id)"
+            ")"
+        )
         self._conn.commit()
+        try:
+            self._conn.execute("ALTER TABLE saved_jobs ADD COLUMN description TEXT")
+            self._conn.commit()
+        except sqlite3.OperationalError:
+            pass
 
     def get_preference(self, chat_id: str, key: str) -> str | None:
         row = self._conn.execute(
@@ -110,6 +130,53 @@ class JobsDB:
             "SELECT chat_id, interval_hours FROM subscribers"
         ).fetchall()
         return [{"chat_id": r[0], "interval_hours": r[1]} for r in rows]
+
+    def save_job(self, chat_id: str, job: dict):
+        self._conn.execute(
+            "INSERT OR IGNORE INTO saved_jobs"
+            " (chat_id, job_id, title, company, location, salary, posted_at, url, description)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                chat_id,
+                job["id"],
+                job.get("title"),
+                job.get("company"),
+                job.get("location"),
+                job.get("salary"),
+                job.get("posted_at"),
+                job.get("url"),
+                job.get("description"),
+            ),
+        )
+        self._conn.commit()
+
+    def get_saved_jobs(self, chat_id: str) -> list[dict]:
+        rows = self._conn.execute(
+            "SELECT job_id, title, company, location, salary, posted_at, url, description, saved_at"
+            " FROM saved_jobs WHERE chat_id = ?"
+            " ORDER BY saved_at DESC",
+            (chat_id,),
+        ).fetchall()
+        return [
+            {
+                "id": r[0],
+                "title": r[1],
+                "company": r[2],
+                "location": r[3],
+                "salary": r[4],
+                "posted_at": r[5],
+                "url": r[6],
+                "description": r[7],
+                "saved_at": r[8],
+            }
+            for r in rows
+        ]
+
+    def clear_saved_jobs(self, chat_id: str):
+        self._conn.execute(
+            "DELETE FROM saved_jobs WHERE chat_id = ?", (chat_id,)
+        )
+        self._conn.commit()
 
     def close(self):
         self._conn.close()
