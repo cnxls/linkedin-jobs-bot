@@ -236,10 +236,13 @@ async def _send_next_job(update: Update, context: ContextTypes.DEFAULT_TYPE):
     remaining = total - idx - 1
     text = format_job_card(job, idx + 1, total)
 
-    buttons = [InlineKeyboardButton("Save", callback_data="save_job")]
+    buttons = []
+    if idx > 0:
+        buttons.append(InlineKeyboardButton("Back", callback_data="prev_job"))
+    buttons.append(InlineKeyboardButton("Save", callback_data="save_job"))
     if remaining > 0:
         buttons.append(InlineKeyboardButton(
-            f"Next  ({remaining} left)", callback_data="next_job"
+            f"Next ({remaining} left)", callback_data="next_job"
         ))
     buttons.append(InlineKeyboardButton("Done", callback_data="done_jobs"))
 
@@ -269,6 +272,14 @@ async def _send_next_job(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def on_next_job(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+    await _send_next_job(update, context)
+
+
+async def on_prev_job(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    idx = context.user_data.get("pending_index", 0)
+    context.user_data["pending_index"] = max(0, idx - 2)
     await _send_next_job(update, context)
 
 
@@ -913,6 +924,7 @@ def main():
     app.add_handler(CommandHandler("saved", saved_jobs_show))
 
     app.add_handler(CallbackQueryHandler(on_next_job, pattern="^next_job$"))
+    app.add_handler(CallbackQueryHandler(on_prev_job, pattern="^prev_job$"))
     app.add_handler(CallbackQueryHandler(on_done_jobs, pattern="^done_jobs$"))
     app.add_handler(CallbackQueryHandler(on_save_job, pattern="^save_job$"))
     app.add_handler(CallbackQueryHandler(on_show_scheduled, pattern="^show_scheduled$"))
