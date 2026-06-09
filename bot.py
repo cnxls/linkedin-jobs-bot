@@ -750,35 +750,132 @@ async def saved_jobs_show(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    MAX_LEN = 4000
-    header = f"<b>Saved Jobs ({len(jobs)})</b>\n\n"
-    parts = []
-    total_len = len(header)
-    truncated = 0
+    context.user_data["saved_list"] = jobs
+    context.user_data["saved_index"] = 0
+    context.user_data["saved_browse_msg_id"] = None
+    await _send_next_saved(update, context)
 
-    for i, job in enumerate(jobs):
-        card = format_single_job(job, i + 1)
-        entry = card + "\n\n"
-        if total_len + len(entry) > MAX_LEN:
-            truncated = len(jobs) - i
-            break
-        parts.append(entry)
-        total_len += len(entry)
 
-    body = header + "".join(parts)
-    if truncated:
-        body = body.rstrip() + f"\n\n<i>…and {truncated} more. Clear and re-save to refresh.</i>"
+async def _send_next_saved(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    jobs = context.user_data.get("saved_list", [])
+    idx = context.user_data.get("saved_index", 0)
+    total = len(jobs)
+    chat_id = update.effective_chat.id
+    browse_msg_id = context.user_data.get("saved_browse_msg_id")
+
+    if idx >= total:
+        remaining = len(context.bot_data["db"].get_saved_jobs(str(chat_id)))
+        text = f"End of saved jobs. <b>{remaining}</b> saved total."
+        keyboard = _main_menu_keyboard()
+        context.user_data["saved_list"] = []
+        context.user_data["saved_index"] = 0
+        context.user_data["saved_browse_msg_id"] = None
+
+        if browse_msg_id:
+            await context.bot.edit_message_text(
+                chat_id=chat_id, message_id=browse_msg_id,
+                text=text, parse_mode=ParseMode.HTML, reply_markup=keyboard,
+            )
+        else:
+            await context.bot.send_message(
+                chat_id=chat_id, text=text,
+                parse_mode=ParseMode.HTML, reply_markup=keyboard,
+            )
+        return
+
+    job = jobs[idx]
+    text = format_job_card(job, idx + 1, total)
+
+    buttons = []
+    if idx > 0:
+        buttons.append(InlineKeyboardButton("Back", callback_data="saved_prev"))
+    buttons.append(InlineKeyboardButton("Remove", callback_data="saved_remove"))
+    if idx + 1 < total:
+        buttons.append(InlineKeyboardButton(
+            f"Next ({total - idx - 1} left)", callback_data="saved_next"
+        ))
+    buttons.append(InlineKeyboardButton("Done", callback_data="saved_done"))
 
     keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("Clear saved", callback_data="clear_saved")],
+        buttons,
+        [InlineKeyboardButton("Open on LinkedIn", url=job.get("url", ""))],
     ])
+    context.user_data["saved_index"] = idx + 1
 
-    await _send(
-        update, context,
-        body,
-        reply_markup=keyboard,
-        disable_web_page_preview=True,
-    )
+    if browse_msg_id:
+        await context.bot.edit_message_text(
+            chat_id=chat_id, message_id=browse_msg_id,
+            text=text, parse_mode=ParseMode.HTML,
+            reply_markup=keyboard, disable_web_page_preview=True,
+        )
+    else:
+        msg = await context.bot.send_message(
+            chat_id=chat_id, text=text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=keyboard, disable_web_page_preview=True,
+        )
+        context.user_data["saved_browse_msg_id"] = msg.message_id
+
+
+async def on_saved_next(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.callback_query.answer()
+    await _send_next_saved(update, context)
+
+
+async def on_saved_prev(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.callback_query.answer()
+    idx = context.user_data.get("saved_index", 0)
+    context.user_data["saved_index"] = max(0, idx - 2)
+    await _send_next_saved(update, context)
+
+
+async def on_saved_remove(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    db: JobsDB = context.bot_data["db"]
+    chat_id = _get_chat_id(update)
+
+    jobs = context.user_data.get("saved_list", [])
+    idx = context.user_data.get("saved_index", 0)
+    current_idx = idx - 1
+
+    if current_idx < 0 or current_idx >= len(jobs):
+        return
+
+    job = jobs[current_idx]
+    db.remove_saved_job(chat_id, job["id"])
+    jobs.pop(current_idx)
+    context.user_data["saved_list"] = jobs
+    context.user_data["saved_index"] = current_idx
+
+    await _send_next_saved(update, context)
+
+
+async def on_saved_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    remaining = len(context.bot_data["db"].get_saved_jobs(_get_chat_id(update)))
+    text = f"<b>{remaining}</b> saved jobs remaining."
+
+    browse_msg_id = context.user_data.get("saved_browse_msg_id")
+    context.user_data["saved_list"] = []
+    context.user_data["saved_index"] = 0
+    context.user_data["saved_browse_msg_id"] = None
+
+    if browse_msg_id:
+        await context.bot.edit_message_text(
+            chat_id=update.effective_chat.id, message_id=browse_msg_id,
+            text=text, parse_mode=ParseMode.HTML,
+            reply_markup=_main_menu_keyboard(),
+        )
+    else:
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=text, parse_mode=ParseMode.HTML,
+            reply_markup=_main_menu_keyboard(),
+        )
 
 
 async def on_clear_saved(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -929,6 +1026,10 @@ def main():
     app.add_handler(CallbackQueryHandler(on_save_job, pattern="^save_job$"))
     app.add_handler(CallbackQueryHandler(on_show_scheduled, pattern="^show_scheduled$"))
     app.add_handler(CallbackQueryHandler(on_clear_saved, pattern="^clear_saved$"))
+    app.add_handler(CallbackQueryHandler(on_saved_next, pattern="^saved_next$"))
+    app.add_handler(CallbackQueryHandler(on_saved_prev, pattern="^saved_prev$"))
+    app.add_handler(CallbackQueryHandler(on_saved_remove, pattern="^saved_remove$"))
+    app.add_handler(CallbackQueryHandler(on_saved_done, pattern="^saved_done$"))
 
     keywords_handler = ConversationHandler(
         entry_points=[

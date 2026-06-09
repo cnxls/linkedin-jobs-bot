@@ -155,3 +155,38 @@ def test_full_multiuser_isolation(db):
     assert db.is_seen("user2", "job200")
     assert db.is_subscribed("user1")
     assert not db.is_subscribed("user2")
+
+
+def test_save_and_remove_job(db):
+    job = {
+        "id": "job1",
+        "title": "ML Intern",
+        "company": "Google",
+        "location": "Kraków",
+        "salary": None,
+        "posted_at": "2026-06-05",
+        "url": "https://linkedin.com/jobs/view/1",
+        "description": "Great role.",
+    }
+    db.save_job("user1", job)
+    assert len(db.get_saved_jobs("user1")) == 1
+    db.remove_saved_job("user1", "job1")
+    assert len(db.get_saved_jobs("user1")) == 0
+
+
+def test_remove_saved_job_isolated(db):
+    job = {
+        "id": "job1",
+        "title": "ML Intern",
+        "company": "Google",
+        "location": "Kraków",
+        "salary": None,
+        "posted_at": "2026-06-05",
+        "url": "https://linkedin.com/jobs/view/1",
+        "description": "Great role.",
+    }
+    db.save_job("user1", job)
+    db.save_job("user2", job)
+    db.remove_saved_job("user1", "job1")
+    assert len(db.get_saved_jobs("user1")) == 0
+    assert len(db.get_saved_jobs("user2")) == 1

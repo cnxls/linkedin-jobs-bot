@@ -178,5 +178,12 @@ class JobsDB:
         )
         self._conn.commit()
 
+    def remove_saved_job(self, chat_id: str, job_id: str):
+        self._conn.execute(
+            "DELETE FROM saved_jobs WHERE chat_id = ? AND job_id = ?",
+            (chat_id, job_id),
+        )
+        self._conn.commit()
+
     def close(self):
         self._conn.close()
