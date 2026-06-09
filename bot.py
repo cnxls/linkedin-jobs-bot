@@ -280,14 +280,25 @@ async def _send_next_job(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["pending_index"] = idx + 1
 
     if browse_msg_id:
-        await context.bot.edit_message_text(
-            chat_id=chat_id,
-            message_id=browse_msg_id,
-            text=text,
-            parse_mode=ParseMode.HTML,
-            reply_markup=keyboard,
-            disable_web_page_preview=True,
-        )
+        try:
+            await context.bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=browse_msg_id,
+                text=text,
+                parse_mode=ParseMode.HTML,
+                reply_markup=keyboard,
+                disable_web_page_preview=True,
+            )
+        except Exception:
+            context.user_data["browse_message_id"] = None
+            msg = await context.bot.send_message(
+                chat_id=chat_id,
+                text=text,
+                parse_mode=ParseMode.HTML,
+                reply_markup=keyboard,
+                disable_web_page_preview=True,
+            )
+            context.user_data["browse_message_id"] = msg.message_id
     else:
         msg = await context.bot.send_message(
             chat_id=chat_id,
@@ -299,15 +310,39 @@ async def _send_next_job(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["browse_message_id"] = msg.message_id
 
 
+async def _check_browse_active(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    if not context.user_data.get("pending_jobs"):
+        query = update.callback_query
+        try:
+            await query.edit_message_text(
+                "Session expired. Please search again.",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("Search for jobs", callback_data="cmd_check")],
+                ]),
+            )
+        except Exception:
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text="Session expired. Please search again.",
+                reply_markup=_main_menu_keyboard(),
+            )
+        return False
+    return True
+
+
 async def on_next_job(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+    if not await _check_browse_active(update, context):
+        return
     await _send_next_job(update, context)
 
 
 async def on_prev_job(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+    if not await _check_browse_active(update, context):
+        return
     idx = context.user_data.get("pending_index", 0)
     context.user_data["pending_index"] = max(0, idx - 2)
     await _send_next_job(update, context)
@@ -316,18 +351,28 @@ async def on_prev_job(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def on_done_jobs(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+    if not await _check_browse_active(update, context):
+        return
 
     browse_msg_id = context.user_data.get("browse_message_id")
     text, keyboard = _browse_summary(context)
 
     if browse_msg_id:
-        await context.bot.edit_message_text(
-            chat_id=update.effective_chat.id,
-            message_id=browse_msg_id,
-            text=text,
-            parse_mode=ParseMode.HTML,
-            reply_markup=keyboard,
-        )
+        try:
+            await context.bot.edit_message_text(
+                chat_id=update.effective_chat.id,
+                message_id=browse_msg_id,
+                text=text,
+                parse_mode=ParseMode.HTML,
+                reply_markup=keyboard,
+            )
+        except Exception:
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text=text,
+                parse_mode=ParseMode.HTML,
+                reply_markup=keyboard,
+            )
     else:
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
@@ -340,6 +385,8 @@ async def on_done_jobs(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def on_save_job(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+    if not await _check_browse_active(update, context):
+        return
 
     cfg = context.bot_data
     db: JobsDB = cfg["db"]
@@ -348,10 +395,8 @@ async def on_save_job(update: Update, context: ContextTypes.DEFAULT_TYPE):
     jobs = context.user_data.get("pending_jobs", [])
     idx = context.user_data.get("pending_index", 0)
 
-    # pending_index was already incremented after displaying, so current job is idx - 1
     current_idx = idx - 1
     if current_idx < 0 or current_idx >= len(jobs):
-        await query.answer("No job to save.")
         return
 
     job = jobs[current_idx]
@@ -372,7 +417,8 @@ async def on_save_job(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     context.user_data["saved_count"] = context.user_data.get("saved_count", 0) + 1
 
-    # Auto-advance to next job (or summary if last)
+    # Force next job as a new message (below the save confirmation)
+    context.user_data["browse_message_id"] = None
     await _send_next_job(update, context)
 
 
