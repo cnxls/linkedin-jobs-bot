@@ -190,3 +190,8 @@ def test_remove_saved_job_isolated(db):
     db.remove_saved_job("user1", "job1")
     assert len(db.get_saved_jobs("user1")) == 0
     assert len(db.get_saved_jobs("user2")) == 1
+
+
+def test_exclusion_preference(db):
+    db.set_preference("user1", "exclusions", "Senior,Lead,Manager")
+    assert db.get_preference("user1", "exclusions") == "Senior,Lead,Manager"

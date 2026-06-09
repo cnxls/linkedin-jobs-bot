@@ -24,6 +24,7 @@ log = logging.getLogger("linkedin_bot")
 WAITING_KEYWORDS = 1
 WAITING_INTERVAL = 2
 WAITING_LOCATION = 3
+WAITING_EXCLUSIONS = 4
 
 EXPERIENCE_OPTIONS = [
     ("1", "Internship"),
@@ -52,6 +53,16 @@ def _format_jt(codes: str) -> str:
         return "Any"
     lookup = dict(JOB_TYPE_OPTIONS)
     return ", ".join(lookup.get(c, c) for c in codes.split(","))
+
+
+def _filter_excluded(jobs: list[dict], exclusions: str | None) -> list[dict]:
+    if not exclusions:
+        return jobs
+    terms = [t.strip().lower() for t in exclusions.split(",") if t.strip()]
+    if not terms:
+        return jobs
+    return [j for j in jobs if not any(t in j.get("title", "").lower() for t in terms)]
+
 
 WELCOME_IMAGE = Path(__file__).parent / "assets" / "welcome.png"
 BOT_NAME = "LinkedIn Jobs Radar"
@@ -154,6 +165,9 @@ async def check(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cfg["apify_token"], keywords,
         params["location"], params["experience_level"], params["job_type"],
     )
+
+    exclusions = db.get_preference(chat_id, "exclusions")
+    all_jobs = _filter_excluded(all_jobs, exclusions)
 
     new_jobs = []
     for job in all_jobs:
@@ -540,12 +554,14 @@ async def settings_show(update: Update, context: ContextTypes.DEFAULT_TYPE):
     loc = params["location"]
     exp = _format_exp(params["experience_level"])
     jt = _format_jt(params["job_type"])
+    excl = db.get_preference(chat_id, "exclusions") or "None"
 
     text = (
         f"<b>Search Settings</b>\n\n"
         f"<b>Location:</b> {loc}\n"
         f"<b>Experience:</b> {exp}\n"
-        f"<b>Job type:</b> {jt}\n\n"
+        f"<b>Job type:</b> {jt}\n"
+        f"<b>Exclusions:</b> {excl}\n\n"
         f"Tap a button to change:"
     )
 
@@ -553,6 +569,7 @@ async def settings_show(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton(f"Location: {loc}", callback_data="set_location")],
         [InlineKeyboardButton(f"Experience: {exp}", callback_data="set_experience")],
         [InlineKeyboardButton(f"Job type: {jt}", callback_data="set_jobtype")],
+        [InlineKeyboardButton(f"Exclusions: {excl}", callback_data="set_exclusions")],
         [InlineKeyboardButton("Back", callback_data="set_back")],
     ])
 
@@ -721,6 +738,60 @@ async def on_set_back(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text="Menu:",
         reply_markup=_main_menu_keyboard(),
     )
+
+
+async def on_set_exclusions(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    db: JobsDB = context.bot_data["db"]
+    chat_id = _get_chat_id(update)
+    current = db.get_preference(chat_id, "exclusions") or ""
+
+    display = current if current else "None"
+    await context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text=(
+            f"<b>Keyword Exclusions</b>\n\n"
+            f"Current: <code>{display}</code>\n\n"
+            f"Jobs with these words in the title will be hidden.\n"
+            f"Send comma-separated words (e.g. <code>Senior, Lead, Manager</code>)\n"
+            f"or send <code>clear</code> to remove all.\n\nOr /cancel."
+        ),
+        parse_mode=ParseMode.HTML,
+    )
+    return WAITING_EXCLUSIONS
+
+
+async def on_exclusions_typed(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    raw = update.message.text.strip()
+
+    db: JobsDB = context.bot_data["db"]
+    chat_id = _get_chat_id(update)
+
+    if raw.lower() == "clear":
+        db.set_preference(chat_id, "exclusions", "")
+        await update.message.reply_text(
+            "Exclusions cleared.",
+            parse_mode=ParseMode.HTML,
+            reply_markup=_main_menu_keyboard(),
+        )
+        return ConversationHandler.END
+
+    terms = [t.strip() for t in raw.split(",") if t.strip()]
+    if not terms:
+        await update.message.reply_text("Send valid keywords or /cancel.")
+        return WAITING_EXCLUSIONS
+
+    value = ",".join(terms)
+    db.set_preference(chat_id, "exclusions", value)
+
+    await update.message.reply_text(
+        f"Exclusions set: <code>{value}</code>\nJobs with these words in the title will be filtered out.",
+        parse_mode=ParseMode.HTML,
+        reply_markup=_main_menu_keyboard(),
+    )
+    return ConversationHandler.END
 
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -926,6 +997,9 @@ async def _scheduled_check(context: ContextTypes.DEFAULT_TYPE):
         params["location"], params["experience_level"], params["job_type"],
     )
 
+    exclusions = db.get_preference(chat_id, "exclusions")
+    all_jobs = _filter_excluded(all_jobs, exclusions)
+
     new_jobs = []
     for job in all_jobs:
         if not db.is_seen(chat_id, job["id"]):
@@ -1072,6 +1146,19 @@ def main():
         fallbacks=[CommandHandler("cancel", cancel)],
     )
     app.add_handler(settings_location_handler)
+
+    exclusions_handler = ConversationHandler(
+        entry_points=[
+            CallbackQueryHandler(on_set_exclusions, pattern="^set_exclusions$"),
+        ],
+        states={
+            WAITING_EXCLUSIONS: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, on_exclusions_typed),
+            ]
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+    )
+    app.add_handler(exclusions_handler)
 
     app.add_handler(CallbackQueryHandler(on_set_experience, pattern="^set_experience$"))
     app.add_handler(CallbackQueryHandler(on_exp_toggle, pattern="^exp_toggle_"))
