@@ -1,9 +1,12 @@
 import asyncio
+import logging
 from telegram import Bot
 
 from db import JobsDB
 from scraper import search_jobs
 from formatter import format_digest
+
+log = logging.getLogger("linkedin_bot")
 
 DEFAULT_LOCATION = "Poland"
 DEFAULT_EXPERIENCE_LEVEL = "1"
@@ -37,7 +40,7 @@ async def run_digest(
     await bot.send_message(chat_id=chat_id, text=message)
 
     db.close()
-    print(f"Sent digest with {len(new_jobs)} new jobs.")
+    log.info("Digest sent to %s: %d new jobs", chat_id, len(new_jobs))
 
 
 if __name__ == "__main__":
@@ -47,7 +50,10 @@ if __name__ == "__main__":
         TELEGRAM_CHAT_ID,
         DB_PATH,
         DEFAULT_KEYWORDS,
+        LOG_DIR,
     )
+    from logger import setup_logging
+    setup_logging(LOG_DIR)
     asyncio.run(run_digest(
         apify_token=APIFY_TOKEN,
         telegram_token=TELEGRAM_TOKEN,

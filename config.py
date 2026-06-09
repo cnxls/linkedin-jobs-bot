@@ -10,6 +10,7 @@ TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "jobs.db")
+LOG_DIR = os.path.join(os.path.dirname(__file__), "logs")
 
 APIFY_ACTOR_ID = "bebity/linkedin-jobs-scraper"
 

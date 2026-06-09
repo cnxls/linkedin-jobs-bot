@@ -1,4 +1,5 @@
 import os
+import logging
 from pathlib import Path
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -16,6 +17,9 @@ from telegram.ext import (
 from db import JobsDB
 from scraper import search_jobs
 from formatter import format_job_card, format_single_job
+from logger import setup_logging
+
+log = logging.getLogger("linkedin_bot")
 
 WAITING_KEYWORDS = 1
 WAITING_INTERVAL = 2
@@ -156,6 +160,8 @@ async def check(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not db.is_seen(chat_id, job["id"]):
             new_jobs.append(job)
             db.mark_seen(chat_id, job["id"])
+
+    log.info("Manual check by %s: %d new jobs out of %d total", chat_id, len(new_jobs), len(all_jobs))
 
     if not new_jobs:
         await _send(
@@ -818,6 +824,8 @@ async def _scheduled_check(context: ContextTypes.DEFAULT_TYPE):
             new_jobs.append(job)
             db.mark_seen(chat_id, job["id"])
 
+    log.info("Scheduled check for %s: %d new jobs", chat_id, len(new_jobs))
+
     if not new_jobs:
         return
 
@@ -883,7 +891,11 @@ def main():
         DEFAULT_KEYWORDS,
         DEFAULT_LOCATION,
         DEFAULT_EXPERIENCE_LEVEL,
+        LOG_DIR,
     )
+
+    setup_logging(LOG_DIR)
+    log.info("Bot starting up")
 
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
@@ -960,7 +972,7 @@ def main():
 
     app.post_init = _restore_subscriptions
 
-    print("Bot is running. Press Ctrl+C to stop.")
+    log.info("Bot polling started")
     app.run_polling()
 
 

@@ -1,7 +1,10 @@
 import hashlib
+import logging
 from urllib.parse import quote_plus
 
 from apify_client import ApifyClient
+
+log = logging.getLogger("linkedin_bot")
 
 ACTOR_ID = "curious_coder/linkedin-jobs-scraper"
 
@@ -62,12 +65,23 @@ def search_jobs(
         "scrapeCompany": False,
     }
 
-    run = client.actor(ACTOR_ID).call(run_input=run_input)
+    log.info("Starting Apify scrape: %d keywords, location=%s", len(keywords), location)
+
+    try:
+        run = client.actor(ACTOR_ID).call(run_input=run_input)
+    except Exception:
+        log.exception("Apify actor call failed")
+        return []
 
     all_jobs = []
     dataset_id = getattr(run, "default_dataset_id", None) or (run.get("defaultDatasetId") if isinstance(run, dict) else None)
     if dataset_id:
         for item in client.dataset(dataset_id).iterate_items():
             all_jobs.append(parse_job_item(item))
+
+    log.info("Scrape complete: %d jobs found", len(all_jobs))
+
+    if len(all_jobs) == 0:
+        log.warning("Scraper returned 0 results — possible LinkedIn block or bad query")
 
     return all_jobs
