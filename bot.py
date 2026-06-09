@@ -92,6 +92,7 @@ def _main_menu_keyboard(pending_count: int = 0) -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton("Unsubscribe", callback_data="cmd_unsubscribe"),
+            InlineKeyboardButton("Help", callback_data="cmd_help"),
         ],
     ])
 
@@ -117,15 +118,17 @@ async def _send(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str, *
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     pending = context.user_data.get("pending_jobs", [])
     welcome = (
-        f"<b>{BOT_NAME}</b>\n\n"
-        "Your personal job search assistant.\n"
-        "I scan LinkedIn for new internship and junior positions "
-        "matching your keywords and deliver them straight here.\n\n"
-        "<b>How it works:</b>\n"
-        "1. Tap <b>Search for jobs</b> to find offers now\n"
-        "2. Browse offers one by one\n"
-        "3. Set up <b>Subscribe</b> for automatic checks\n\n"
-        "Customize your <b>Keywords</b> to match your dream role."
+        f"<b>Welcome to {BOT_NAME}!</b>\n\n"
+        "I scan LinkedIn and deliver fresh job offers straight to your chat.\n\n"
+        "<b>Get started in 3 steps:</b>\n"
+        "1. <b>Keywords</b> — set what roles to search for\n"
+        "2. <b>Settings</b> — pick your location, job type, experience\n"
+        "3. <b>Search for jobs</b> — get matched offers instantly\n\n"
+        "<b>Pro tips:</b>\n"
+        "- Use <b>Subscribe</b> to get automatic daily checks\n"
+        "- <b>Save</b> interesting offers to review later\n"
+        "- Use <b>Presets</b> in Settings to switch between search configs\n"
+        "- Set <b>Exclusions</b> to hide jobs with words like 'Senior' or 'Lead'"
     )
 
     if WELCOME_IMAGE.exists():
@@ -200,6 +203,13 @@ async def check(update: Update, context: ContextTypes.DEFAULT_TYPE):
         update, context,
         f"Found <b>{len(new_jobs)}</b> new offer(s)!",
     )
+    if not context.user_data.get("tip_browse_shown"):
+        context.user_data["tip_browse_shown"] = True
+        await _send(
+            update, context,
+            "Tip: Use <b>Save</b> to keep offers you like. "
+            "Press <b>Back</b> to revisit the previous offer.",
+        )
     await _send_next_job(update, context)
 
 
@@ -458,6 +468,14 @@ async def subscribe_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text="Menu:",
         reply_markup=_main_menu_keyboard(),
     )
+    if not context.user_data.get("tip_settings_shown"):
+        context.user_data["tip_settings_shown"] = True
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text="Tip: Use <b>Settings</b> to change your search location, "
+            "experience level, and job type for more relevant results.",
+            parse_mode=ParseMode.HTML,
+        )
     return ConversationHandler.END
 
 
@@ -483,6 +501,14 @@ async def subscribe_set(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode=ParseMode.HTML,
         reply_markup=_main_menu_keyboard(),
     )
+    if not context.user_data.get("tip_settings_shown"):
+        context.user_data["tip_settings_shown"] = True
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text="Tip: Use <b>Settings</b> to change your search location, "
+            "experience level, and job type for more relevant results.",
+            parse_mode=ParseMode.HTML,
+        )
     return ConversationHandler.END
 
 
@@ -557,6 +583,46 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text += f"<b>Pending offers:</b> {remaining}\n"
 
     await _send(update, context, text, reply_markup=_main_menu_keyboard(remaining))
+
+
+async def help_show(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    if query:
+        await query.answer()
+
+    text = (
+        "<b>Help — LinkedIn Jobs Radar</b>\n\n"
+        "<b>Search for jobs</b>\n"
+        "Scans LinkedIn with your keywords and settings. "
+        "Browse results one by one — save the good ones, skip the rest.\n\n"
+        "<b>Keywords</b>\n"
+        "Set job titles to search for, separated by commas. "
+        "Example: <code>ML Intern, Python Dev, Data Analyst</code>\n\n"
+        "<b>Settings</b>\n"
+        "Change your search location, experience level, "
+        "and job type (remote/hybrid/on-site).\n\n"
+        "<b>Presets</b> (in Settings)\n"
+        "Save your current keywords + settings as a named preset. "
+        "Switch between different search configs instantly.\n\n"
+        "<b>Exclusions</b> (in Settings)\n"
+        "Hide jobs containing specific words in the title. "
+        "Example: <code>Senior, Lead, Manager</code>\n\n"
+        "<b>Subscribe</b>\n"
+        "Set up automatic checks every 6/12/24h. "
+        "New offers are delivered to your chat automatically.\n\n"
+        "<b>Saved</b>\n"
+        "Browse your saved jobs one by one. "
+        "Remove individual jobs or open them on LinkedIn.\n\n"
+        "<b>Status</b>\n"
+        "View your current settings, subscription status, "
+        "bot uptime, and last scrape info.\n\n"
+        "<b>Commands:</b>\n"
+        "/start — Main menu\n"
+        "/help — This help page\n"
+        "/check — Quick search\n"
+        "/cancel — Cancel current action"
+    )
+    await _send(update, context, text, reply_markup=_main_menu_keyboard())
 
 
 async def settings_show(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1132,6 +1198,8 @@ async def on_menu_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await saved_jobs_show(update, context)
     elif data == "cmd_presets":
         await on_presets(update, context)
+    elif data == "cmd_help":
+        await help_show(update, context)
 
 
 async def _scheduled_check(context: ContextTypes.DEFAULT_TYPE):
@@ -1252,6 +1320,7 @@ def main():
     app.bot_data["last_scrape_status"] = None
 
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("help", help_show))
     app.add_handler(CommandHandler("check", check))
     app.add_handler(CommandHandler("unsubscribe", unsubscribe))
     app.add_handler(CommandHandler("status", status))
