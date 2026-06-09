@@ -25,6 +25,7 @@ WAITING_KEYWORDS = 1
 WAITING_INTERVAL = 2
 WAITING_LOCATION = 3
 WAITING_EXCLUSIONS = 4
+WAITING_PRESET_NAME = 5
 
 EXPERIENCE_OPTIONS = [
     ("1", "Internship"),
@@ -570,6 +571,7 @@ async def settings_show(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton(f"Experience: {exp}", callback_data="set_experience")],
         [InlineKeyboardButton(f"Job type: {jt}", callback_data="set_jobtype")],
         [InlineKeyboardButton(f"Exclusions: {excl}", callback_data="set_exclusions")],
+        [InlineKeyboardButton("Presets", callback_data="cmd_presets")],
         [InlineKeyboardButton("Back", callback_data="set_back")],
     ])
 
@@ -803,6 +805,134 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 
+async def on_presets(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    if query:
+        await query.answer()
+
+    db: JobsDB = context.bot_data["db"]
+    chat_id = _get_chat_id(update)
+    presets = db.get_presets(chat_id)
+
+    rows = []
+    for p in presets:
+        rows.append([InlineKeyboardButton(
+            f"Load: {p['name']}", callback_data=f"preset_load_{p['name']}"
+        )])
+    for p in presets:
+        rows.append([InlineKeyboardButton(
+            f"Delete: {p['name']}", callback_data=f"preset_del_{p['name']}"
+        )])
+    rows.append([InlineKeyboardButton("Save current as preset", callback_data="preset_save")])
+    rows.append([InlineKeyboardButton("Back", callback_data="set_back")])
+
+    text = "<b>Search Presets</b>\n\n"
+    if presets:
+        for p in presets:
+            kw = p["keywords"] or "default"
+            loc = p["location"] or "default"
+            text += f"<b>{p['name']}</b>: {kw} in {loc}\n"
+    else:
+        text += "No presets saved yet.\n"
+    text += "\nSave your current keywords + settings as a named preset."
+
+    await _send(update, context, text, reply_markup=InlineKeyboardMarkup(rows))
+
+
+async def on_preset_save_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    await context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text="Send a name for this preset (e.g. <code>ML Poland</code>):\n\nOr /cancel.",
+        parse_mode=ParseMode.HTML,
+    )
+    return WAITING_PRESET_NAME
+
+
+async def on_preset_name_typed(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    name = update.message.text.strip()
+    if not name or len(name) > 30:
+        await update.message.reply_text("Name must be 1-30 characters. Try again or /cancel.")
+        return WAITING_PRESET_NAME
+
+    db: JobsDB = context.bot_data["db"]
+    cfg = context.bot_data
+    chat_id = _get_chat_id(update)
+
+    keywords = db.get_keywords(chat_id) or cfg["default_keywords"]
+    params = _user_search_params(db, chat_id, cfg)
+
+    db.save_preset(chat_id, name, {
+        "keywords": ",".join(keywords),
+        "location": params["location"],
+        "experience_level": params["experience_level"],
+        "job_type": params["job_type"],
+    })
+
+    await update.message.reply_text(
+        f"Preset <b>{name}</b> saved!",
+        parse_mode=ParseMode.HTML,
+        reply_markup=_main_menu_keyboard(),
+    )
+    return ConversationHandler.END
+
+
+async def on_preset_load(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    name = query.data.removeprefix("preset_load_")
+    db: JobsDB = context.bot_data["db"]
+    chat_id = _get_chat_id(update)
+
+    presets = db.get_presets(chat_id)
+    preset = next((p for p in presets if p["name"] == name), None)
+    if not preset:
+        await query.edit_message_text("Preset not found.")
+        return
+
+    if preset["keywords"]:
+        kws = [k.strip() for k in preset["keywords"].split(",") if k.strip()]
+        if kws:
+            db.set_keywords(chat_id, kws)
+    if preset["location"]:
+        db.set_preference(chat_id, "location", preset["location"])
+    if preset["experience_level"]:
+        db.set_preference(chat_id, "experience_level", preset["experience_level"])
+    db.set_preference(chat_id, "job_type", preset.get("job_type", ""))
+
+    await query.edit_message_text(
+        f"Loaded preset <b>{name}</b>!\n\n"
+        f"Keywords: {preset['keywords'] or 'default'}\n"
+        f"Location: {preset['location'] or 'default'}\n"
+        f"Experience: {_format_exp(preset['experience_level'])}\n"
+        f"Job type: {_format_jt(preset.get('job_type', ''))}",
+        parse_mode=ParseMode.HTML,
+    )
+    await context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text="Menu:",
+        reply_markup=_main_menu_keyboard(),
+    )
+
+
+async def on_preset_delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    name = query.data.removeprefix("preset_del_")
+    db: JobsDB = context.bot_data["db"]
+    chat_id = _get_chat_id(update)
+    db.delete_preset(chat_id, name)
+
+    await query.edit_message_text(
+        f"Preset <b>{name}</b> deleted.",
+        parse_mode=ParseMode.HTML,
+        reply_markup=_main_menu_keyboard(),
+    )
+
+
 async def saved_jobs_show(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     if query:
@@ -983,6 +1113,8 @@ async def on_menu_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await settings_show(update, context)
     elif data == "cmd_saved":
         await saved_jobs_show(update, context)
+    elif data == "cmd_presets":
+        await on_presets(update, context)
 
 
 async def _scheduled_check(context: ContextTypes.DEFAULT_TYPE):
@@ -1159,6 +1291,23 @@ def main():
         fallbacks=[CommandHandler("cancel", cancel)],
     )
     app.add_handler(exclusions_handler)
+
+    preset_name_handler = ConversationHandler(
+        entry_points=[
+            CallbackQueryHandler(on_preset_save_start, pattern="^preset_save$"),
+        ],
+        states={
+            WAITING_PRESET_NAME: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, on_preset_name_typed),
+            ]
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+    )
+    app.add_handler(preset_name_handler)
+
+    app.add_handler(CallbackQueryHandler(on_preset_load, pattern="^preset_load_"))
+    app.add_handler(CallbackQueryHandler(on_preset_delete, pattern="^preset_del_"))
+    app.add_handler(CallbackQueryHandler(on_presets, pattern="^cmd_presets$"))
 
     app.add_handler(CallbackQueryHandler(on_set_experience, pattern="^set_experience$"))
     app.add_handler(CallbackQueryHandler(on_exp_toggle, pattern="^exp_toggle_"))

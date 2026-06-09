@@ -50,6 +50,17 @@ class JobsDB:
             "  PRIMARY KEY (chat_id, job_id)"
             ")"
         )
+        self._conn.execute(
+            "CREATE TABLE IF NOT EXISTS presets ("
+            "  chat_id TEXT NOT NULL,"
+            "  name TEXT NOT NULL,"
+            "  keywords TEXT,"
+            "  location TEXT,"
+            "  experience_level TEXT,"
+            "  job_type TEXT,"
+            "  PRIMARY KEY (chat_id, name)"
+            ")"
+        )
         self._conn.commit()
         try:
             self._conn.execute("ALTER TABLE saved_jobs ADD COLUMN description TEXT")
@@ -182,6 +193,45 @@ class JobsDB:
         self._conn.execute(
             "DELETE FROM saved_jobs WHERE chat_id = ? AND job_id = ?",
             (chat_id, job_id),
+        )
+        self._conn.commit()
+
+    def save_preset(self, chat_id: str, name: str, data: dict):
+        self._conn.execute(
+            "INSERT OR REPLACE INTO presets"
+            " (chat_id, name, keywords, location, experience_level, job_type)"
+            " VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                chat_id, name,
+                data.get("keywords", ""),
+                data.get("location", ""),
+                data.get("experience_level", ""),
+                data.get("job_type", ""),
+            ),
+        )
+        self._conn.commit()
+
+    def get_presets(self, chat_id: str) -> list[dict]:
+        rows = self._conn.execute(
+            "SELECT name, keywords, location, experience_level, job_type"
+            " FROM presets WHERE chat_id = ? ORDER BY name",
+            (chat_id,),
+        ).fetchall()
+        return [
+            {
+                "name": r[0],
+                "keywords": r[1],
+                "location": r[2],
+                "experience_level": r[3],
+                "job_type": r[4],
+            }
+            for r in rows
+        ]
+
+    def delete_preset(self, chat_id: str, name: str):
+        self._conn.execute(
+            "DELETE FROM presets WHERE chat_id = ? AND name = ?",
+            (chat_id, name),
         )
         self._conn.commit()
 

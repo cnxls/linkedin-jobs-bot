@@ -195,3 +195,46 @@ def test_remove_saved_job_isolated(db):
 def test_exclusion_preference(db):
     db.set_preference("user1", "exclusions", "Senior,Lead,Manager")
     assert db.get_preference("user1", "exclusions") == "Senior,Lead,Manager"
+
+
+def test_presets_table_created(db):
+    conn = sqlite3.connect(db.path)
+    tables = conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+    names = {t[0] for t in tables}
+    assert "presets" in names
+    conn.close()
+
+
+def test_save_and_get_preset(db):
+    db.save_preset("user1", "ML Poland", {
+        "keywords": "ML Intern,AI Dev",
+        "location": "Poland",
+        "experience_level": "1",
+        "job_type": "2",
+    })
+    presets = db.get_presets("user1")
+    assert len(presets) == 1
+    assert presets[0]["name"] == "ML Poland"
+    assert presets[0]["location"] == "Poland"
+
+
+def test_presets_isolated_per_user(db):
+    db.save_preset("user1", "Preset A", {"keywords": "ML", "location": "Poland", "experience_level": "1", "job_type": ""})
+    db.save_preset("user2", "Preset B", {"keywords": "Data", "location": "Germany", "experience_level": "2", "job_type": "1"})
+    assert len(db.get_presets("user1")) == 1
+    assert len(db.get_presets("user2")) == 1
+    assert db.get_presets("user1")[0]["name"] == "Preset A"
+
+
+def test_delete_preset(db):
+    db.save_preset("user1", "Old", {"keywords": "ML", "location": "Poland", "experience_level": "1", "job_type": ""})
+    db.delete_preset("user1", "Old")
+    assert len(db.get_presets("user1")) == 0
+
+
+def test_save_preset_replaces(db):
+    db.save_preset("user1", "My Preset", {"keywords": "ML", "location": "Poland", "experience_level": "1", "job_type": ""})
+    db.save_preset("user1", "My Preset", {"keywords": "Data", "location": "Germany", "experience_level": "2", "job_type": "1"})
+    presets = db.get_presets("user1")
+    assert len(presets) == 1
+    assert presets[0]["location"] == "Germany"
