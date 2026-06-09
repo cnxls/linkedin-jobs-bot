@@ -1,5 +1,7 @@
 import os
 import logging
+import time
+from datetime import timedelta
 from pathlib import Path
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -175,6 +177,9 @@ async def check(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not db.is_seen(chat_id, job["id"]):
             new_jobs.append(job)
             db.mark_seen(chat_id, job["id"])
+
+    context.bot_data["last_scrape"] = time.time()
+    context.bot_data["last_scrape_status"] = f"{len(new_jobs)} new / {len(all_jobs)} total"
 
     log.info("Manual check by %s: %d new jobs out of %d total", chat_id, len(new_jobs), len(all_jobs))
 
@@ -527,6 +532,15 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     exp = _format_exp(params["experience_level"])
     jt = _format_jt(params["job_type"])
 
+    uptime_secs = int(time.time() - cfg.get("start_time", time.time()))
+    uptime_str = str(timedelta(seconds=uptime_secs))
+    last_scrape = cfg.get("last_scrape")
+    if last_scrape:
+        ago = int(time.time() - last_scrape)
+        scrape_str = f"{timedelta(seconds=ago)} ago ({cfg.get('last_scrape_status', '')})"
+    else:
+        scrape_str = "Not yet"
+
     text = (
         f"<b>Your Dashboard</b>\n\n"
         f"<b>Keywords:</b> {kw_list}\n"
@@ -534,6 +548,9 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"<b>Experience:</b> {exp}\n"
         f"<b>Job type:</b> {jt}\n"
         f"<b>Auto-check:</b> {sub_status}\n"
+        f"<b>Bot status:</b> Online\n"
+        f"<b>Uptime:</b> {uptime_str}\n"
+        f"<b>Last scrape:</b> {scrape_str}\n"
     )
 
     if remaining > 0:
@@ -1138,6 +1155,9 @@ async def _scheduled_check(context: ContextTypes.DEFAULT_TYPE):
             new_jobs.append(job)
             db.mark_seen(chat_id, job["id"])
 
+    context.bot_data["last_scrape"] = time.time()
+    context.bot_data["last_scrape_status"] = f"{len(new_jobs)} new / {len(all_jobs)} total"
+
     log.info("Scheduled check for %s: %d new jobs", chat_id, len(new_jobs))
 
     if not new_jobs:
@@ -1195,6 +1215,15 @@ async def _restore_subscriptions(app):
             data=sub["chat_id"],
             name=f"check_{sub['chat_id']}",
         )
+    for sub in db.get_subscribers():
+        try:
+            await app.bot.send_message(
+                chat_id=sub["chat_id"],
+                text="Bot is now <b>online</b>.",
+                parse_mode=ParseMode.HTML,
+            )
+        except Exception:
+            log.warning("Could not send online notification to %s", sub["chat_id"])
 
 
 def main():
@@ -1218,6 +1247,9 @@ def main():
     app.bot_data["default_keywords"] = DEFAULT_KEYWORDS
     app.bot_data["location"] = DEFAULT_LOCATION
     app.bot_data["experience_level"] = DEFAULT_EXPERIENCE_LEVEL
+    app.bot_data["start_time"] = time.time()
+    app.bot_data["last_scrape"] = None
+    app.bot_data["last_scrape_status"] = None
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("check", check))
@@ -1320,6 +1352,21 @@ def main():
     app.add_handler(CallbackQueryHandler(on_menu_button, pattern="^cmd_"))
 
     app.post_init = _restore_subscriptions
+
+    async def _on_shutdown(app):
+        log.info("Bot shutting down")
+        db: JobsDB = app.bot_data["db"]
+        for sub in db.get_subscribers():
+            try:
+                await app.bot.send_message(
+                    chat_id=sub["chat_id"],
+                    text="Bot is going <b>offline</b>.",
+                    parse_mode=ParseMode.HTML,
+                )
+            except Exception:
+                log.warning("Could not send offline notification to %s", sub["chat_id"])
+
+    app.post_shutdown = _on_shutdown
 
     log.info("Bot polling started")
     app.run_polling()
