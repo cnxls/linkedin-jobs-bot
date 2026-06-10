@@ -405,19 +405,33 @@ async def on_save_job(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Send a standalone saved-job message with LinkedIn URL button
     total = len(jobs)
     text = format_job_card(job, current_idx + 1, total)
+    save_markup = (
+        InlineKeyboardMarkup([[InlineKeyboardButton("Open on LinkedIn", url=job["url"])]])
+        if job.get("url") else None
+    )
     await context.bot.send_message(
         chat_id=update.effective_chat.id,
         text=text,
         parse_mode=ParseMode.HTML,
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("Open on LinkedIn", url=job["url"])],
-        ]),
+        reply_markup=save_markup,
         disable_web_page_preview=True,
     )
 
     context.user_data["saved_count"] = context.user_data.get("saved_count", 0) + 1
 
-    # Force next job as a new message (below the save confirmation)
+    # Remove buttons from the old browse message so stale callbacks can't fire
+    old_msg_id = context.user_data.get("browse_message_id")
+    if old_msg_id:
+        try:
+            await context.bot.edit_message_reply_markup(
+                chat_id=update.effective_chat.id,
+                message_id=old_msg_id,
+                reply_markup=None,
+            )
+        except Exception:
+            pass
+
+    # Send next job as a new message (below the save confirmation)
     context.user_data["browse_message_id"] = None
     await _send_next_job(update, context)
 
@@ -1102,10 +1116,16 @@ async def _send_next_saved(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["saved_browse_msg_id"] = None
 
         if browse_msg_id:
-            await context.bot.edit_message_text(
-                chat_id=chat_id, message_id=browse_msg_id,
-                text=text, parse_mode=ParseMode.HTML, reply_markup=keyboard,
-            )
+            try:
+                await context.bot.edit_message_text(
+                    chat_id=chat_id, message_id=browse_msg_id,
+                    text=text, parse_mode=ParseMode.HTML, reply_markup=keyboard,
+                )
+            except Exception:
+                await context.bot.send_message(
+                    chat_id=chat_id, text=text,
+                    parse_mode=ParseMode.HTML, reply_markup=keyboard,
+                )
         else:
             await context.bot.send_message(
                 chat_id=chat_id, text=text,
@@ -1126,18 +1146,27 @@ async def _send_next_saved(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ))
     buttons.append(InlineKeyboardButton("Done", callback_data="saved_done"))
 
-    keyboard = InlineKeyboardMarkup([
-        buttons,
-        [InlineKeyboardButton("Open on LinkedIn", url=job.get("url", ""))],
-    ])
+    rows = [buttons]
+    if job.get("url"):
+        rows.append([InlineKeyboardButton("Open on LinkedIn", url=job["url"])])
+    keyboard = InlineKeyboardMarkup(rows)
     context.user_data["saved_index"] = idx + 1
 
     if browse_msg_id:
-        await context.bot.edit_message_text(
-            chat_id=chat_id, message_id=browse_msg_id,
-            text=text, parse_mode=ParseMode.HTML,
-            reply_markup=keyboard, disable_web_page_preview=True,
-        )
+        try:
+            await context.bot.edit_message_text(
+                chat_id=chat_id, message_id=browse_msg_id,
+                text=text, parse_mode=ParseMode.HTML,
+                reply_markup=keyboard, disable_web_page_preview=True,
+            )
+        except Exception:
+            context.user_data["saved_browse_msg_id"] = None
+            msg = await context.bot.send_message(
+                chat_id=chat_id, text=text,
+                parse_mode=ParseMode.HTML,
+                reply_markup=keyboard, disable_web_page_preview=True,
+            )
+            context.user_data["saved_browse_msg_id"] = msg.message_id
     else:
         msg = await context.bot.send_message(
             chat_id=chat_id, text=text,
@@ -1195,11 +1224,18 @@ async def on_saved_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["saved_browse_msg_id"] = None
 
     if browse_msg_id:
-        await context.bot.edit_message_text(
-            chat_id=update.effective_chat.id, message_id=browse_msg_id,
-            text=text, parse_mode=ParseMode.HTML,
-            reply_markup=_main_menu_keyboard(),
-        )
+        try:
+            await context.bot.edit_message_text(
+                chat_id=update.effective_chat.id, message_id=browse_msg_id,
+                text=text, parse_mode=ParseMode.HTML,
+                reply_markup=_main_menu_keyboard(),
+            )
+        except Exception:
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text=text, parse_mode=ParseMode.HTML,
+                reply_markup=_main_menu_keyboard(),
+            )
     else:
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
@@ -1226,6 +1262,10 @@ async def on_clear_saved(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def on_menu_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    try:
+        await query.answer()
+    except Exception:
+        pass
     data = query.data
 
     if data == "cmd_check":
@@ -1329,7 +1369,6 @@ async def _restore_subscriptions(app):
             data=sub["chat_id"],
             name=f"check_{sub['chat_id']}",
         )
-    for sub in db.get_subscribers():
         try:
             await app.bot.send_message(
                 chat_id=sub["chat_id"],
