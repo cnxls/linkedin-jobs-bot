@@ -19,11 +19,18 @@ def build_linkedin_search_url(
         f"https://www.linkedin.com/jobs/search/?"
         f"keywords={quote_plus(keyword)}"
         f"&location={quote_plus(location)}"
-        f"&f_E={experience_level}"
         f"&f_TPR=r86400"
     )
+    if experience_level:
+        for code in experience_level.split(","):
+            code = code.strip()
+            if code:
+                url += f"&f_E={code}"
     if job_type:
-        url += f"&f_WT={job_type}"
+        for code in job_type.split(","):
+            code = code.strip()
+            if code:
+                url += f"&f_WT={code}"
     return url
 
 

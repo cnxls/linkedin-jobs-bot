@@ -1,6 +1,7 @@
 import asyncio
 import logging
 from telegram import Bot
+from telegram.constants import ParseMode
 
 from db import JobsDB
 from scraper import search_jobs
@@ -37,7 +38,7 @@ async def run_digest(
     message = format_digest(new_jobs)
 
     bot = Bot(token=telegram_token)
-    await bot.send_message(chat_id=chat_id, text=message)
+    await bot.send_message(chat_id=chat_id, text=message, parse_mode=ParseMode.HTML)
 
     db.close()
     log.info("Digest sent to %s: %d new jobs", chat_id, len(new_jobs))
