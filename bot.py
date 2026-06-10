@@ -175,11 +175,7 @@ async def check(update: Update, context: ContextTypes.DEFAULT_TYPE):
     exclusions = db.get_preference(chat_id, "exclusions")
     all_jobs = _filter_excluded(all_jobs, exclusions)
 
-    new_jobs = []
-    for job in all_jobs:
-        if not db.is_seen(chat_id, job["id"]):
-            new_jobs.append(job)
-            db.mark_seen(chat_id, job["id"])
+    new_jobs = [job for job in all_jobs if not db.is_seen(chat_id, job["id"])]
 
     context.bot_data["last_scrape"] = time.time()
     context.bot_data["last_scrape_status"] = f"{len(new_jobs)} new / {len(all_jobs)} total"
@@ -266,6 +262,9 @@ async def _send_next_job(update: Update, context: ContextTypes.DEFAULT_TYPE):
     remaining = total - idx - 1
     text = format_job_card(job, idx + 1, total)
 
+    db: JobsDB = context.bot_data["db"]
+    db.mark_seen(str(chat_id), job["id"])
+
     buttons = []
     if idx > 0:
         buttons.append(InlineKeyboardButton("Back", callback_data="prev_job"))
@@ -332,7 +331,10 @@ async def _check_browse_active(update: Update, context: ContextTypes.DEFAULT_TYP
 
 async def on_next_job(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer()
+    try:
+        await query.answer()
+    except Exception:
+        pass
     if not await _check_browse_active(update, context):
         return
     await _send_next_job(update, context)
@@ -384,7 +386,7 @@ async def on_done_jobs(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def on_save_job(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer()
+    await query.answer("Saved! ✓")
     if not await _check_browse_active(update, context):
         return
 
@@ -401,38 +403,9 @@ async def on_save_job(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     job = jobs[current_idx]
     db.save_job(chat_id, job)
-
-    # Send a standalone saved-job message with LinkedIn URL button
-    total = len(jobs)
-    text = format_job_card(job, current_idx + 1, total)
-    save_markup = (
-        InlineKeyboardMarkup([[InlineKeyboardButton("Open on LinkedIn", url=job["url"])]])
-        if job.get("url") else None
-    )
-    await context.bot.send_message(
-        chat_id=update.effective_chat.id,
-        text=text,
-        parse_mode=ParseMode.HTML,
-        reply_markup=save_markup,
-        disable_web_page_preview=True,
-    )
-
     context.user_data["saved_count"] = context.user_data.get("saved_count", 0) + 1
 
-    # Remove buttons from the old browse message so stale callbacks can't fire
-    old_msg_id = context.user_data.get("browse_message_id")
-    if old_msg_id:
-        try:
-            await context.bot.edit_message_reply_markup(
-                chat_id=update.effective_chat.id,
-                message_id=old_msg_id,
-                reply_markup=None,
-            )
-        except Exception:
-            pass
-
-    # Send next job as a new message (below the save confirmation)
-    context.user_data["browse_message_id"] = None
+    # Edit the existing browse message in place — no duplicate card sent
     await _send_next_job(update, context)
 
 
@@ -1303,11 +1276,7 @@ async def _scheduled_check(context: ContextTypes.DEFAULT_TYPE):
     exclusions = db.get_preference(chat_id, "exclusions")
     all_jobs = _filter_excluded(all_jobs, exclusions)
 
-    new_jobs = []
-    for job in all_jobs:
-        if not db.is_seen(chat_id, job["id"]):
-            new_jobs.append(job)
-            db.mark_seen(chat_id, job["id"])
+    new_jobs = [job for job in all_jobs if db.mark_seen_if_new(chat_id, job["id"])]
 
     context.bot_data["last_scrape"] = time.time()
     context.bot_data["last_scrape_status"] = f"{len(new_jobs)} new / {len(all_jobs)} total"
@@ -1326,9 +1295,7 @@ async def _scheduled_check(context: ContextTypes.DEFAULT_TYPE):
         ]),
     )
 
-    user_data = context.application.user_data.setdefault(int(chat_id), {})
-    user_data["pending_jobs"] = new_jobs
-    user_data["pending_index"] = 0
+    context.bot_data[f"scheduled_pending_{chat_id}"] = new_jobs
 
 
 async def on_show_scheduled(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1337,6 +1304,11 @@ async def on_show_scheduled(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer()
     except Exception:
         pass
+    chat_id = update.effective_chat.id
+    scheduled_key = f"scheduled_pending_{chat_id}"
+    if scheduled_key in context.bot_data:
+        context.user_data["pending_jobs"] = context.bot_data.pop(scheduled_key)
+        context.user_data["pending_index"] = 0
     context.user_data["saved_count"] = 0
     context.user_data["browse_message_id"] = None
     await _send_next_job(update, context)

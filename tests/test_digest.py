@@ -11,7 +11,7 @@ def test_run_digest_sends_new_jobs():
         mock_db = MagicMock()
         mock_db_cls.return_value = mock_db
         mock_db.get_keywords.return_value = ["ML Intern"]
-        mock_db.is_seen.return_value = False
+        mock_db.mark_seen_if_new.return_value = True
 
         mock_search.return_value = [
             {
@@ -36,7 +36,7 @@ def test_run_digest_sends_new_jobs():
         ))
 
         mock_bot.send_message.assert_called_once()
-        mock_db.mark_seen.assert_called_with("123", "job456")
+        mock_db.mark_seen_if_new.assert_called_with("123", "job456")
 
 
 def test_run_digest_skips_seen_jobs():
@@ -47,7 +47,7 @@ def test_run_digest_skips_seen_jobs():
         mock_db = MagicMock()
         mock_db_cls.return_value = mock_db
         mock_db.get_keywords.return_value = ["ML Intern"]
-        mock_db.is_seen.return_value = True
+        mock_db.mark_seen_if_new.return_value = False
 
         mock_search.return_value = [
             {

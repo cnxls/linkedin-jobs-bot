@@ -29,11 +29,7 @@ async def run_digest(
     job_type = prefs.get("job_type", "")
     all_jobs = search_jobs(apify_token, keywords, location, experience_level, job_type)
 
-    new_jobs = []
-    for job in all_jobs:
-        if not db.is_seen(chat_id, job["id"]):
-            new_jobs.append(job)
-            db.mark_seen(chat_id, job["id"])
+    new_jobs = [job for job in all_jobs if db.mark_seen_if_new(chat_id, job["id"])]
 
     message = format_digest(new_jobs)
 

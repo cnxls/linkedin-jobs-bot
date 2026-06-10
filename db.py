@@ -102,6 +102,15 @@ class JobsDB:
         )
         self._conn.commit()
 
+    def mark_seen_if_new(self, chat_id: str, job_id: str) -> bool:
+        """Atomically mark seen; returns True only if the job was previously unseen."""
+        cursor = self._conn.execute(
+            "INSERT OR IGNORE INTO seen_jobs (chat_id, job_id) VALUES (?, ?)",
+            (chat_id, job_id),
+        )
+        self._conn.commit()
+        return cursor.rowcount > 0
+
     def get_keywords(self, chat_id: str) -> list[str]:
         rows = self._conn.execute(
             "SELECT keyword FROM keywords WHERE chat_id = ?", (chat_id,)
